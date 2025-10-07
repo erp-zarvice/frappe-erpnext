@@ -8,7 +8,7 @@
     </p>
 
 [![Learn on Frappe School](https://img.shields.io/badge/Frappe%20School-Learn%20ERPNext-blue?style=flat-square)](https://frappe.school)<br><br>
-[![CI](https://github.com/frappe/erpnext/actions/workflows/server-tests-mariadb.yml/badge.svg?event=schedule)](https://github.com/frappe/erpnext/actions/workflows/server-tests-mariadb.yml)
+[![CI](https://github.com/erp-zarvice/erpnext/actions/workflows/server-tests-mariadb.yml/badge.svg?event=schedule)](https://github.com/erp-zarvice/erpnext/actions/workflows/server-tests-mariadb.yml)
 [![docker pulls](https://img.shields.io/docker/pulls/frappe/erpnext-worker.svg)](https://hub.docker.com/r/frappe/erpnext-worker)
 
 </div>
@@ -28,6 +28,8 @@
 ## ERPNext
 
 100% Open-Source ERP system to help you run your business.
+
+This version is maintained by Edarmor Innovations Pvt. Ltd. for enterprise use.
 
 ### Motivation
 
@@ -52,7 +54,7 @@ Running a business is a complex task - handling invoices, tracking stock, managi
 
 ### Under the Hood
 
-- [**Frappe Framework**](https://github.com/frappe/frappe): A full-stack web application framework written in Python and Javascript. The framework provides a robust foundation for building web applications, including a database abstraction layer, user authentication, and a REST API.
+- [**Frappe Framework**](https://github.com/erp-zarvice/frappe): A full-stack web application framework written in Python and Javascript. The framework provides a robust foundation for building web applications, including a database abstraction layer, user authentication, and a REST API.
 
 - [**Frappe UI**](https://github.com/frappe/frappe-ui): A Vue-based UI library, to provide a modern user interface. The Frappe UI library provides a variety of components that can be used to build single-page applications on top of the Frappe Framework.
 
@@ -83,7 +85,7 @@ Prerequisites: docker, docker-compose, git. Refer [Docker Documentation](https:/
 Run following commands:
 
 ```
-git clone https://github.com/frappe/frappe_docker
+git clone https://github.com/erp-zarvice/frappe_docker
 cd frappe_docker
 docker compose -f pwd.yml up -d
 ```
@@ -121,7 +123,7 @@ To setup the repository locally follow the steps mentioned below:
 3. Get the ERPNext app and install it
    ```
    # Get the ERPNext app
-   bench get-app https://github.com/frappe/erpnext
+   bench get-app https://github.com/erp-zarvice/erpnext
 
    # Install the app
    bench --site erpnext.localhost install-app erpnext
@@ -139,9 +141,9 @@ To setup the repository locally follow the steps mentioned below:
 
 ## Contributing
 
-1. [Issue Guidelines](https://github.com/frappe/erpnext/wiki/Issue-Guidelines)
-1. [Report Security Vulnerabilities](https://erpnext.com/security)
-1. [Pull Request Requirements](https://github.com/frappe/erpnext/wiki/Contribution-Guidelines)
+1. [Issue Guidelines](https://github.com/erp-zarvice/erpnext/issues)
+1. [Report Security Vulnerabilities](https://edarmor.com/security)
+1. [Pull Request Requirements](https://github.com/erp-zarvice/erpnext/pulls)
 2. [Translations](https://crowdin.com/project/frappe)
 
 
@@ -152,10 +154,7 @@ Please read our [Logo and Trademark Policy](TRADEMARK_POLICY.md).
 <br />
 <br />
 <div align="center" style="padding-top: 0.75rem;">
-	<a href="https://frappe.io" target="_blank">
-		<picture>
-			<source media="(prefers-color-scheme: dark)" srcset="https://frappe.io/files/Frappe-white.png">
-			<img src="https://frappe.io/files/Frappe-black.png" alt="Frappe Technologies" height="28"/>
-		</picture>
+	<a href="https://edarmor.com" target="_blank">
+		<p>Maintained by Edarmor Innovations Pvt. Ltd.</p>
 	</a>
 </div>

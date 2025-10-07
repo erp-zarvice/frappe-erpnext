@@ -1,7 +1,7 @@
 [project]
 name = "erpnext"
 authors = [
-    { name = "Frappe Technologies Pvt Ltd", email = "developers@frappe.io"}
+    { name = "Edarmor Innovations Pvt. Ltd", email = "contact@edarmor.com"}
 ]
 description = "Open Source ERP"
 requires-python = ">=3.10"
@@ -82,5 +82,5 @@ docstring-code-format = true
 
 [project.urls]
 Homepage = "https://frappe.io/erpnext"
-Repository = "https://github.com/frappe/erpnext.git"
-"Bug Reports" = "https://github.com/frappe/erpnext/issues"
+Repository = "https://github.com/erp-zarvice/erpnext.git"
+"Bug Reports" = "https://github.com/erp-zarvice/erpnext/issues"
