@@ -2570,6 +2570,7 @@ class AccountsController(TransactionBase):
 
 		self.payment_schedule = []
 		self.payment_terms_template = po_or_so.payment_terms_template
+		posting_date = self.get("bill_date") or self.get("posting_date") or self.get("transaction_date")
 
 		for schedule in po_or_so.payment_schedule:
 			payment_schedule = {
@@ -2582,6 +2583,17 @@ class AccountsController(TransactionBase):
 			}
 
 			if automatically_fetch_payment_terms:
+				if schedule.due_date_based_on:
+					payment_schedule["due_date"] = get_due_date(schedule, posting_date)
+					payment_schedule["due_date_based_on"] = schedule.due_date_based_on
+					payment_schedule["credit_days"] = cint(schedule.credit_days)
+					payment_schedule["credit_months"] = cint(schedule.credit_months)
+
+				if schedule.discount_validity_based_on:
+					payment_schedule["discount_date"] = get_discount_date(schedule, posting_date)
+					payment_schedule["discount_validity_based_on"] = schedule.discount_validity_based_on
+					payment_schedule["discount_validity"] = cint(schedule.discount_validity)
+
 				payment_schedule["payment_amount"] = flt(
 					grand_total * flt(payment_schedule["invoice_portion"]) / 100,
 					schedule.precision("payment_amount"),
@@ -3076,9 +3088,7 @@ def set_balance_in_account_currency(
 			_("Account: {0} with currency: {1} can not be selected").format(gl_dict.account, account_currency)
 		)
 
-	gl_dict["account_currency"] = (
-		company_currency if account_currency == company_currency else account_currency
-	)
+	gl_dict["account_currency"] = account_currency
 
 	# set debit/credit in account currency if not provided
 	if flt(gl_dict.debit) and not flt(gl_dict.debit_in_account_currency):
@@ -3384,14 +3394,27 @@ def get_payment_term_details(
 		term = frappe.get_doc("Payment Term", term)
 	else:
 		term_details.payment_term = term.payment_term
-	term_details.description = term.description
-	term_details.invoice_portion = term.invoice_portion
+
+	fields_to_copy = [
+		"description",
+		"invoice_portion",
+		"discount_type",
+		"discount",
+		"mode_of_payment",
+		"due_date_based_on",
+		"credit_days",
+		"credit_months",
+		"discount_validity_based_on",
+		"discount_validity",
+	]
+
+	for field in fields_to_copy:
+		term_details[field] = term.get(field)
+
 	term_details.payment_amount = flt(term.invoice_portion) * flt(grand_total) / 100
 	term_details.base_payment_amount = flt(term.invoice_portion) * flt(base_grand_total) / 100
-	term_details.discount_type = term.discount_type
-	term_details.discount = term.discount
 	term_details.outstanding = term_details.payment_amount
-	term_details.mode_of_payment = term.mode_of_payment
+	term_details.base_outstanding = term_details.base_payment_amount
 
 	if bill_date:
 		term_details.due_date = get_due_date(term, bill_date)
@@ -3410,11 +3433,11 @@ def get_due_date(term, posting_date=None, bill_date=None):
 	due_date = None
 	date = bill_date or posting_date
 	if term.due_date_based_on == "Day(s) after invoice date":
-		due_date = add_days(date, term.credit_days)
+		due_date = add_days(date, cint(term.credit_days))
 	elif term.due_date_based_on == "Day(s) after the end of the invoice month":
-		due_date = add_days(get_last_day(date), term.credit_days)
+		due_date = add_days(get_last_day(date), cint(term.credit_days))
 	elif term.due_date_based_on == "Month(s) after the end of the invoice month":
-		due_date = get_last_day(add_months(date, term.credit_months))
+		due_date = get_last_day(add_months(date, cint(term.credit_months)))
 	return due_date
 
 
@@ -3422,11 +3445,11 @@ def get_discount_date(term, posting_date=None, bill_date=None):
 	discount_validity = None
 	date = bill_date or posting_date
 	if term.discount_validity_based_on == "Day(s) after invoice date":
-		discount_validity = add_days(date, term.discount_validity)
+		discount_validity = add_days(date, cint(term.discount_validity))
 	elif term.discount_validity_based_on == "Day(s) after the end of the invoice month":
-		discount_validity = add_days(get_last_day(date), term.discount_validity)
+		discount_validity = add_days(get_last_day(date), cint(term.discount_validity))
 	elif term.discount_validity_based_on == "Month(s) after the end of the invoice month":
-		discount_validity = get_last_day(add_months(date, term.discount_validity))
+		discount_validity = get_last_day(add_months(date, cint(term.discount_validity)))
 	return discount_validity
 
 
@@ -3779,9 +3802,9 @@ def update_child_qty_rate(parent_doctype, trans_items, parent_doctype_name, chil
 			any_qty_changed = True
 
 		if (
-			parent.doctype == "Purchase Order"
+			parent.doctype in ["Sales Order", "Purchase Order"]
 			and parent.is_subcontracted
-			and not parent.is_old_subcontracting_flow
+			and not parent.get("is_old_subcontracting_flow")
 		):
 			validate_fg_item_for_subcontracting(d, new_child_flag)
 			child_item.fg_item_qty = flt(d["fg_item_qty"])
@@ -3866,7 +3889,7 @@ def update_child_qty_rate(parent_doctype, trans_items, parent_doctype_name, chil
 	parent.set_qty_as_per_stock_uom()
 	parent.calculate_taxes_and_totals()
 	parent.set_total_in_words()
-	if parent_doctype == "Sales Order":
+	if parent_doctype == "Sales Order" and not parent.is_subcontracted:
 		make_packing_list(parent)
 		parent.set_gross_profit()
 	frappe.get_cached_doc("Authorization Control").validate_approving_authority(
@@ -3913,6 +3936,12 @@ def update_child_qty_rate(parent_doctype, trans_items, parent_doctype_name, chil
 						).format(frappe.bold(parent.name))
 					)
 	else:  # Sales Order
+		if parent.is_subcontracted and not parent.can_update_items():
+			frappe.throw(
+				_(
+					"Items cannot be updated as Subcontracting Inward Order(s) exist against this Subcontracted Sales Order."
+				)
+			)
 		parent.validate_selling_price()
 		parent.validate_for_duplicate_items()
 		parent.validate_warehouse()
@@ -3932,7 +3961,7 @@ def update_child_qty_rate(parent_doctype, trans_items, parent_doctype_name, chil
 	parent.validate_uom_is_integer("stock_uom", "stock_qty")
 
 	# Cancel and Recreate Stock Reservation Entries.
-	if parent_doctype == "Sales Order":
+	if parent_doctype == "Sales Order" and not parent.is_subcontracted:
 		from erpnext.stock.doctype.stock_reservation_entry.stock_reservation_entry import (
 			cancel_stock_reservation_entries,
 			has_reserved_stock,

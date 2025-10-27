@@ -11,7 +11,7 @@ from frappe.cache_manager import clear_defaults_cache
 from frappe.contacts.address_and_contact import load_address_and_contact
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 from frappe.desk.page.setup_wizard.setup_wizard import make_records
-from frappe.utils import cint, formatdate, get_link_to_form, get_timestamp, today
+from frappe.utils import add_months, cint, formatdate, get_first_day, get_link_to_form, get_timestamp, today
 from frappe.utils.nestedset import NestedSet, rebuild_tree
 
 from erpnext.accounts.doctype.account.account import get_account_currency
@@ -100,6 +100,7 @@ class Company(NestedSet):
 		round_off_for_opening: DF.Link | None
 		sales_monthly_history: DF.SmallText | None
 		series_for_depreciation_entry: DF.Data | None
+		service_expense_account: DF.Link | None
 		stock_adjustment_account: DF.Link | None
 		stock_received_but_not_billed: DF.Link | None
 		submit_err_jv: DF.Check
@@ -570,6 +571,21 @@ class Company(NestedSet):
 
 			self.db_set("disposal_account", disposal_acct)
 
+		if not self.service_expense_account:
+			service_expense_acct = frappe.db.get_value(
+				"Account",
+				{
+					"account_name": _("Marketing Expenses"),
+					"company": self.name,
+					"is_group": 0,
+					"root_type": "Expense",
+				},
+				"name",
+			)
+
+			if service_expense_acct:
+				self.db_set("service_expense_account", service_expense_acct)
+
 	def _set_default_account(self, fieldname, account_type):
 		if self.get(fieldname):
 			return
@@ -746,39 +762,39 @@ def install_country_fixtures(company, country):
 
 
 def update_company_current_month_sales(company):
-	current_month_year = formatdate(today(), "MM-yyyy")
+	from_date = get_first_day(today())
+	to_date = get_first_day(add_months(from_date, 1))
 
 	results = frappe.db.sql(
-		f"""
+		"""
 		SELECT
 			SUM(base_grand_total) AS total,
-			DATE_FORMAT(`posting_date`, '%m-%Y') AS month_year
+			DATE_FORMAT(posting_date, '%%m-%%Y') AS month_year
 		FROM
 			`tabSales Invoice`
 		WHERE
-			DATE_FORMAT(`posting_date`, '%m-%Y') = '{current_month_year}'
+			posting_date >= %s
+			AND posting_date < %s
 			AND docstatus = 1
-			AND company = {frappe.db.escape(company)}
+			AND company = %s
 		GROUP BY
 			month_year
-	""",
+		""",
+		(from_date, to_date, company),
 		as_dict=True,
 	)
 
 	monthly_total = results[0]["total"] if len(results) > 0 else 0
-
 	frappe.db.set_value("Company", company, "total_monthly_sales", monthly_total)
 
 
 def update_company_monthly_sales(company):
 	"""Cache past year monthly sales of every company based on sales invoices"""
-	import json
-
 	from frappe.utils.goal import get_monthly_results
 
-	filter_str = f"company = {frappe.db.escape(company)} and status != 'Draft' and docstatus=1"
+	filter_dict = {"company": company, "status": ["!=", "Draft"], "docstatus": 1}
 	month_to_value_dict = get_monthly_results(
-		"Sales Invoice", "base_grand_total", "posting_date", filter_str, "sum"
+		"Sales Invoice", "base_grand_total", "posting_date", filter_dict, "sum"
 	)
 
 	frappe.db.set_value("Company", company, "sales_monthly_history", json.dumps(month_to_value_dict))

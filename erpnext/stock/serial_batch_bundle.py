@@ -3,6 +3,7 @@ from collections import defaultdict
 import frappe
 from frappe import _, bold
 from frappe.model.naming import make_autoname
+from frappe.query_builder import Case
 from frappe.query_builder.functions import CombineDatetime, Sum, Timestamp
 from frappe.utils import add_days, cint, cstr, flt, get_link_to_form, getdate, now, nowtime, today
 from pypika import Order
@@ -613,11 +614,13 @@ class SerialNoValuation(DeprecatedSerialNoValuation):
 		else:
 			self.serial_no_incoming_rate = defaultdict(float)
 			self.stock_value_change = 0.0
+			self.old_serial_nos = []
 
 			serial_nos = self.get_serial_nos()
 			for serial_no in serial_nos:
 				incoming_rate = self.get_incoming_rate_from_bundle(serial_no)
 				if incoming_rate is None:
+					self.old_serial_nos.append(serial_no)
 					continue
 
 				self.stock_value_change += incoming_rate
@@ -714,6 +717,7 @@ class BatchNoValuation(DeprecatedBatchNoValuation):
 		for key, value in kwargs.items():
 			setattr(self, key, value)
 
+		self.total_qty = defaultdict(float)
 		self.stock_queue = []
 		self.batch_nos = self.get_batch_nos()
 		self.prepare_batches()
@@ -735,6 +739,7 @@ class BatchNoValuation(DeprecatedBatchNoValuation):
 			for ledger in entries:
 				self.stock_value_differece[ledger.batch_no] += flt(ledger.incoming_rate)
 				self.available_qty[ledger.batch_no] += flt(ledger.qty)
+				self.total_qty[ledger.batch_no] += flt(ledger.total_qty)
 
 			self.calculate_avg_rate_from_deprecarated_ledgers()
 			self.calculate_avg_rate_for_non_batchwise_valuation()
@@ -762,13 +767,16 @@ class BatchNoValuation(DeprecatedBatchNoValuation):
 			.on(parent.name == child.parent)
 			.select(
 				child.batch_no,
-				Sum(child.stock_value_difference).as_("incoming_rate"),
-				Sum(child.qty).as_("qty"),
+				Sum(Case().when(timestamp_condition, child.stock_value_difference).else_(0)).as_(
+					"incoming_rate"
+				),
+				Sum(Case().when(timestamp_condition, child.qty).else_(0)).as_("qty"),
+				Sum(child.qty).as_("total_qty"),
 			)
 			.where(
-				(child.batch_no.isin(self.batchwise_valuation_batches))
-				& (parent.warehouse == self.sle.warehouse)
+				(parent.warehouse == self.sle.warehouse)
 				& (parent.item_code == self.sle.item_code)
+				& (child.batch_no.isin(self.batchwise_valuation_batches))
 				& (parent.docstatus == 1)
 				& (parent.is_cancelled == 0)
 				& (parent.type_of_transaction.isin(["Inward", "Outward"]))
@@ -784,8 +792,6 @@ class BatchNoValuation(DeprecatedBatchNoValuation):
 			query = query.where(parent.voucher_no != self.sle.voucher_no)
 
 		query = query.where(parent.voucher_type != "Pick List")
-		if timestamp_condition:
-			query = query.where(timestamp_condition)
 
 		return query.run(as_dict=True)
 
@@ -1024,12 +1030,22 @@ class SerialBatchCreation:
 		for d in remove_list:
 			package.remove(d)
 
-	def make_serial_and_batch_bundle(self):
+	def make_serial_and_batch_bundle(
+		self, serial_nos=None, batch_nos=None
+	):  # passing None instead of [] due to ruff linter error B006
+		serial_nos = serial_nos or []
+		batch_nos = batch_nos or []
+
 		doc = frappe.new_doc("Serial and Batch Bundle")
 		valid_columns = doc.meta.get_valid_columns()
 		for key, value in self.__dict__.items():
 			if key in valid_columns:
 				doc.set(key, value)
+
+		if serial_nos:
+			self.serial_nos = serial_nos
+		if batch_nos:
+			self.batches = batch_nos
 
 		if self.type_of_transaction == "Outward":
 			self.set_auto_serial_batch_entries_for_outward()
@@ -1079,10 +1095,21 @@ class SerialBatchCreation:
 				self.batch_no = batches[0]
 				self.serial_nos = self.get_auto_created_serial_nos()
 
-	def update_serial_and_batch_entries(self):
+	def update_serial_and_batch_entries(
+		self, serial_nos=None, batch_nos=None
+	):  # passing None instead of [] due to ruff linter error B006
+		serial_nos = serial_nos or []
+		batch_nos = batch_nos or []
+
 		doc = frappe.get_doc("Serial and Batch Bundle", self.serial_and_batch_bundle)
 		doc.type_of_transaction = self.type_of_transaction
 		doc.set("entries", [])
+
+		if serial_nos:
+			self.serial_nos = serial_nos
+		if batch_nos:
+			self.batch_nos = batch_nos
+
 		self.set_auto_serial_batch_entries_for_outward()
 		self.set_serial_batch_entries(doc)
 		if not doc.get("entries"):
@@ -1291,6 +1318,12 @@ class SerialBatchCreation:
 		if self.get("voucher_type"):
 			voucher_type = self.get("voucher_type")
 
+		posting_date = frappe.db.get_value(
+			voucher_type,
+			voucher_no,
+			"posting_date",
+		)
+
 		for _i in range(abs(cint(self.actual_qty))):
 			serial_no = make_autoname(self.serial_no_series, "Serial No")
 			sr_nos.append(serial_no)
@@ -1310,6 +1343,7 @@ class SerialBatchCreation:
 					"Active",
 					voucher_type,
 					voucher_no,
+					posting_date,
 					self.batch_no,
 				)
 			)
@@ -1330,6 +1364,7 @@ class SerialBatchCreation:
 				"status",
 				"reference_doctype",
 				"reference_name",
+				"posting_date",
 				"batch_no",
 			]
 
@@ -1389,11 +1424,12 @@ def get_batch_current_qty(batch):
 
 
 def throw_negative_batch_validation(batch_no, qty):
+	# This validation is important for backdated stock transactions with batch items
 	frappe.throw(
-		_("The Batch {0} has negative quantity {1}. Please correct the quantity.").format(
-			bold(batch_no), bold(qty)
-		),
-		title=_("Negative Batch Quantity"),
+		_(
+			"The Batch {0} has negative batch quantity {1}. To fix this, go to the batch and click on Recalculate Batch Qty. If the issue still persists, create an inward entry."
+		).format(bold(get_link_to_form("Batch", batch_no)), bold(qty)),
+		title=_("Negative Stock Error"),
 	)
 
 
@@ -1418,3 +1454,28 @@ def get_batchwise_qty(voucher_type, voucher_no):
 		return frappe._dict({})
 
 	return frappe._dict(batches)
+
+
+def get_serial_batch_list_from_item(item):
+	serial_list, batch_list = [], []
+	if item.serial_and_batch_bundle:
+		table = frappe.qb.DocType("Serial and Batch Entry")
+		query = (
+			frappe.qb.from_(table)
+			.select(table.serial_no, table.batch_no)
+			.where(table.parent == item.serial_and_batch_bundle)
+		)
+		result = query.run(as_dict=True)
+
+		for row in result:
+			if row.serial_no and row.serial_no not in serial_list:
+				serial_list.append(row.serial_no)
+			if row.batch_no and row.batch_no not in batch_list:
+				batch_list.append(row.batch_no)
+	else:
+		from erpnext.stock.doctype.serial_no.serial_no import get_serial_nos
+
+		serial_list = get_serial_nos(item.serial_no) if item.serial_no else []
+		batch_list = [item.batch_no] if item.batch_no else []
+
+	return serial_list, batch_list
